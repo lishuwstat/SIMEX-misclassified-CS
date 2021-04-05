@@ -1,0 +1,397 @@
+
+
+
+time1= date()
+
+n = 200
+
+theta0 = c(0.5, 0.5)
+
+mm = 1000
+
+alpha =  0.95
+
+beta = 0.95
+
+p <- length(theta0) ### dimension
+
+gamma = alpha + beta - 1
+
+##seed.start = 100 ## seed is seed.start+m
+
+### quadratic
+theta = matrix(1,mm,p)
+see = matrix(1,mm,p)
+cp = matrix(1,mm,p)
+
+#### linear
+theta.linear = matrix(1,mm,p)
+see.linear = matrix(1,mm,p)
+cp.linear = matrix(1,mm,p)
+
+### cubic
+theta.cubic = matrix(1,mm,p)
+see.cubic = matrix(1,mm,p)
+cp.cubic = matrix(1,mm,p)
+
+theta.naive = matrix(1,mm,p)
+see.naive = matrix(1,mm,p)
+cp.naive = matrix(1,mm,p)
+
+m.rate = c()
+loop = c()
+left = c()
+
+#############
+
+LinEE <-function(n, p, Delta, Z, C, theta.ini){ 
+
+## in this function, beta denotes the regression vector, theta.
+
+beta = theta.ini ## initial value of regression parameter
+
+ Delta<-matrix(Delta[order(C[,1]),],n,1)
+  Z<-matrix(Z[order(C[,1]),],n,p)
+  C<-apply(C,2,sort)
+
+  #to estimate beta
+##  beta0<-rep(1,p)
+ beta0<-beta
+  beta1<-beta0
+  ep<-1
+  iter<-1
+  while(ep>10^(-5)&&iter<100){
+    Sn0<-matrix(0,n,1)
+    Sn1<-matrix(0,n,p)
+    Zn<-matrix(0,n,p)
+    Sn2<-array(0,dim=c(p,p,n)) 
+    Yn<-array(0,dim=c(p,p,n)) 
+    inte1<-matrix(0,n,p)
+    inte2<-array(0,dim=c(p,p,n)) 
+    a<-0
+    b<-0
+    b2 <-0
+    for(i in 1:n) {  
+      if(Delta[i,]==0)
+      {
+
+            Sn0[i]<-sum(exp(-(Z[i:n,]*C[i])%*%beta0))
+            Sn1[i,]<-apply((matrix(rep(exp(-(Z[i:n,]*C[i])%*%beta0),p),(n-i+1),p)*Z[i:n,]*C[i]),2,sum)
+            Sn2[,,i]<-t(matrix(rep(exp(-(Z[i:n,]*C[i])%*%beta0),p),(n-i+1),p)*Z[i:n,]*C[i])%*%(Z[i:n,]*C[i])
+
+        Zn[i,]<-Sn1[i,]/Sn0[i]
+        inte1[i,]<-Z[i,]*C[i]-Zn[i,]
+        b<-b+inte1[i,]
+        Yn[,,i]<-Sn2[,,i]/Sn0[i]
+        inte2[,,i]<-(Yn[,,i]-Zn[i,]%*%t(Zn[i,]))
+        a<-a+inte2[,,i]
+      }
+
+##b2<-b2+inte1[i,]%*%t(inte1[i,])
+    }
+    beta1<-(beta0-solve(a)%*%b)
+    ep<-max(abs(beta1-beta0))
+    iter<-iter+1
+    beta0<-beta1
+  }
+  
+  sigma_es<-sqrt(diag(solve(a)))
+
+return(c(beta1, sigma_es))
+}         
+
+
+######  main code
+
+for(m in 1:mm){
+
+##set.seed(seed.start+m)
+
+x1 = rbinom(n,1,0.5)
+
+x2 = runif(n,0,sqrt(12))
+
+x = cbind(x1,x2)  #### n by p
+
+tau=1
+
+C <- runif(n, 0, tau)
+
+Cdf <- 1-exp(-(log(1+C/5)+0.2*C)-x%*%theta0*C)
+
+Delta1 <- c()
+
+i = 1
+for(i in 1: n){
+               Delta1[i] = rbinom(1,1,Cdf[i])
+}
+
+
+##Delta = 1*(t>=C)
+##Delta1 = 1-Delta =1*(t<C)
+
+gamma = alpha + beta - 1
+
+Y = sapply(1:n, FUN = function(X){
+
+ifelse(Delta1[X]==1, 
+
+rbinom(1, 1, prob = alpha), 
+
+rbinom(1, 1, prob = 1-beta)) }) 
+
+L.prob = mean(Y)
+
+### SIMEX
+
+B = 50
+
+misMat = matrix(c(alpha,1-beta,1-alpha,beta),2,2)
+temp = eigen(misMat)
+Lam <- diag(temp$values)
+E <- temp$vectors 
+##E %*% Lam^2 %*% solve(E) == misMat%*%misMat
+
+lam.seq = c(1,2,3,4)
+
+B.hat = B.var1 = B.var2 = matrix(0,p,length(lam.seq))
+
+d = 1
+
+for(d in 1:length(lam.seq)){
+
+lam = lam.seq[d]
+
+##### repeat the following process for B times
+
+B.theta = matrix(0,2*p,B)
+
+b=1
+for(b in 1:B){
+
+misMat.b =E%*%Lam^lam%*%solve(E)
+
+Y.b = sapply(1:n, FUN = function(X){
+
+ifelse(Y[X]==1, 
+
+rbinom(1, 1, prob = misMat.b[1,1]), 
+
+rbinom(1, 1, prob = 1-misMat.b[2,2])) }) 
+
+value.simex.b = LinEE(n, p, as.matrix(Y.b), as.matrix(x), as.matrix(C), rep(0,p))
+
+theta.hat.simex.b = value.simex.b[1:p]
+
+theta.var.simex.b = (value.simex.b[(p+1):(2*p)])^2
+
+B.theta[,b] = c(theta.hat.simex.b,theta.var.simex.b) 
+
+}
+
+########### the end of  this repeat
+
+B.result = apply(B.theta,1,mean)
+B.var2[,d] = ((B-1)/B)*(apply(B.theta[1:p,],1,sd))^2
+B.hat[,d] = B.result[1:p]  ##### dth average estimate of theta.hat for B times
+B.var1[,d] = B.result[(p+1):(2*p)]  ##### dth average variance of theta.hat for B times
+
+}
+
+### naive analysis #####################
+
+value.lin = LinEE(n, p, as.matrix(Y), as.matrix(x), as.matrix(C), rep(0,p))
+
+theta.naive.hat = value.lin[1:p]
+
+see.lin.hat = value.lin[(p+1):(2*p)]
+
+###############extrapolation
+
+B.hat = cbind(theta.naive.hat,B.hat)
+
+B.var = cbind(see.lin.hat^2,(B.var1 - B.var2)) 
+
+lam.seq.new = c(0,lam.seq)
+
+### quadratic
+
+f <- function(x,a,b,c){a+b*x+c*x^2}
+
+theta.simex = rep(0,p)
+var.simex = rep(0,p)
+
+for(i in 1:p){
+y1 = B.hat[i,]
+
+temp.x = cbind(1,lam.seq.new,lam.seq.new^2)
+result1 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y1))
+temp.theta.simex = f(-1,result1[1],result1[2],result1[3])
+
+theta.simex[i] = temp.theta.simex
+
+y2 = B.var[i,]
+
+result2 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y2))
+temp.theta.var = f(-1,result2[1],result2[2],result2[3])
+
+var.simex[i] = temp.theta.var 
+}
+
+see.theta.simex = sqrt(var.simex)
+
+cp.theta = (theta.simex-1.96*see.theta.simex < theta0)*(theta0< theta.simex+1.96*see.theta.simex)
+
+theta[m,] = theta.simex
+see[m,] = see.theta.simex
+cp[m,] = cp.theta
+
+
+#### linear
+
+f.linear <- function(x,a,b){a+b*x}
+
+theta.simex1 = rep(0,p)
+var.simex1 = rep(0,p)
+
+for(i in 1:p){
+y1 = B.hat[i,]
+
+temp.x = cbind(1,lam.seq.new)
+result1 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y1))
+temp.theta.simex = f.linear(-1,result1[1],result1[2])
+
+theta.simex1[i] = temp.theta.simex
+
+y2 = B.var[i,]
+
+result2 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y2))
+temp.theta.var = f.linear(-1,result2[1],result2[2])
+
+var.simex1[i] = temp.theta.var 
+}
+
+##theta.simex
+
+see.theta.simex1 = sqrt(var.simex1)
+
+cp.theta1 = (theta.simex1-1.96*see.theta.simex1 < theta0)*(theta0< theta.simex1+1.96*see.theta.simex1)
+
+theta.linear[m,] = theta.simex1
+see.linear[m,] = see.theta.simex1
+cp.linear[m,] = cp.theta1
+
+
+### cubic
+
+f.cubic <- function(x,a,b,c,d){a+b*x+c*x^2+d*x^3}
+
+theta.simex3 = rep(0,p)
+var.simex3 = rep(0,p)
+
+for(i in 1:p){
+y1 = B.hat[i,]
+
+temp.x = cbind(1,lam.seq.new,lam.seq.new^2,lam.seq.new^3)
+result1 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y1))
+temp.theta.simex = f.cubic(-1,result1[1],result1[2],result1[3],result1[4])
+
+theta.simex3[i] = temp.theta.simex
+
+y2 = B.var[i,]
+
+result2 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y2))
+temp.theta.var = f.cubic(-1,result2[1],result2[2],result2[3],result2[4])
+
+var.simex3[i] = temp.theta.var 
+}
+
+##theta.simex
+
+see.theta.simex3 = sqrt(var.simex3)
+
+cp.theta3 = (theta.simex3-1.96*see.theta.simex3 < theta0)*(theta0< theta.simex3+1.96*see.theta.simex3)
+
+theta.cubic[m,] = theta.simex3
+see.cubic[m,] = see.theta.simex3
+cp.cubic[m,] = cp.theta3
+
+left[m] = mean(Y)
+m.rate[m] = 1 - mean(Y==Delta1) 
+
+theta.naive[m,] = theta.naive.hat
+see.naive[m,] = see.lin.hat
+}
+
+
+bias_theta.naive = apply(theta.naive,2,mean) - theta0
+sd_theta.naive = apply(theta.naive,2,sd)
+see_theta.naive = apply(na.omit(see.naive),2,mean)
+
+cp2 = (theta.naive-1.96*see.naive < theta0)*(theta0< theta.naive+1.96*see.naive)
+cp.naive = apply(na.omit(cp2),2,mean)
+
+### linear
+
+bias_theta1 = apply(theta.linear,2,mean) - theta0
+sd_theta1 = apply(theta.linear,2,sd)
+see_theta1 = apply(na.omit(see.linear),2,mean)
+cp_theta1 = apply(na.omit(cp.linear),2,mean)
+
+### quadratic
+
+bias_theta2 = apply(theta,2,mean) - theta0
+sd_theta2 = apply(theta,2,sd)
+see_theta2 = apply(na.omit(see),2,mean)
+cp_theta2 = apply(na.omit(cp),2,mean)
+
+### cubic
+
+bias_theta3 = apply(theta.cubic,2,mean) - theta0
+sd_theta3 = apply(theta.cubic,2,sd)
+see_theta3 = apply(na.omit(see.cubic),2,mean)
+cp_theta3 = apply(na.omit(cp.cubic),2,mean)
+
+print(c('n=',n))
+
+print(c('theta=',theta0))
+print(c('alpha=',alpha))
+print(c('beta=',beta))
+
+### linear
+print(c('bias_theta1=',bias_theta1))
+print(c('sd1=',sd_theta1))
+print(c('see1=',see_theta1))
+print(c('cp1=',cp_theta1))
+
+### quadratic
+print(c('bias_theta2=',bias_theta2))
+print(c('sd2=',sd_theta2))
+print(c('see2=',see_theta2))
+print(c('cp2=',cp_theta2))
+
+### cubic
+print(c('bias_theta3=',bias_theta3))
+print(c('sd3=',sd_theta3))
+print(c('see3=',see_theta3))
+print(c('cp3=',cp_theta3))
+
+######### naive analysis
+print(c('bias_theta.naive=',bias_theta.naive))
+print(c('sd.naive=',sd_theta.naive))
+print(c('see.naive=',see_theta.naive))
+print(c('cp.naive=',cp.naive))
+
+print(c('left=',mean(left)))
+print(c('m.rate=',mean(m.rate)))
+
+time2 = date()
+
+print(rbind(time1,time2))
+
+
+
+
+
+
+

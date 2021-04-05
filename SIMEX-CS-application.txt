@@ -1,0 +1,301 @@
+
+ 
+
+time1= date()
+
+## before implementing of the proposed method, one needs to input alpha, beta, n, p, x, C, Y 
+
+#alpha =  0.913 # sensitivity
+
+#beta = 0.993  # specificity
+
+gamma = alpha + beta - 1
+
+## n ## n is the sample size 
+## p ## p is the length of the covariates
+## x ## covariate matrix, n by p
+## C ## vector containing  the observation times, length is n 
+## Y ##  Y= (T<=C) ## T is a vector containing all failure times of interest, which are unobservable in current status data  
+
+
+
+############# necessary function 
+
+LinEE <-function(n, p, Delta, Z, C, theta.ini){ 
+
+## in this function, beta denotes the regression vector, theta.
+
+beta = theta.ini ## initial value of regression parameter
+
+ Delta<-matrix(Delta[order(C[,1]),],n,1)
+  Z<-matrix(Z[order(C[,1]),],n,p)
+  C<-apply(C,2,sort)
+
+  #to estimate beta
+##  beta0<-rep(1,p)
+ beta0<-beta
+  beta1<-beta0
+  ep<-1
+  iter<-1
+  while(ep>10^(-5)&&iter<100){
+    Sn0<-matrix(0,n,1)
+    Sn1<-matrix(0,n,p)
+    Zn<-matrix(0,n,p)
+    Sn2<-array(0,dim=c(p,p,n)) 
+    Yn<-array(0,dim=c(p,p,n)) 
+    inte1<-matrix(0,n,p)
+    inte2<-array(0,dim=c(p,p,n)) 
+    a<-0
+    b<-0
+    b2 <-0
+    for(i in 1:n) {  
+      if(Delta[i,]==0)
+      {
+
+            Sn0[i]<-sum(exp(-(Z[i:n,]*C[i])%*%beta0))
+            Sn1[i,]<-apply((matrix(rep(exp(-(Z[i:n,]*C[i])%*%beta0),p),(n-i+1),p)*Z[i:n,]*C[i]),2,sum)
+            Sn2[,,i]<-t(matrix(rep(exp(-(Z[i:n,]*C[i])%*%beta0),p),(n-i+1),p)*Z[i:n,]*C[i])%*%(Z[i:n,]*C[i])
+
+        Zn[i,]<-Sn1[i,]/Sn0[i]
+        inte1[i,]<-Z[i,]*C[i]-Zn[i,]
+        b<-b+inte1[i,]
+        Yn[,,i]<-Sn2[,,i]/Sn0[i]
+        inte2[,,i]<-(Yn[,,i]-Zn[i,]%*%t(Zn[i,]))
+        a<-a+inte2[,,i]
+      }
+
+##b2<-b2+inte1[i,]%*%t(inte1[i,])
+    }
+    beta1<-(beta0-solve(a)%*%b)
+    ep<-max(abs(beta1-beta0))
+    iter<-iter+1
+    beta0<-beta1
+  }
+  
+  sigma_es<-sqrt(diag(solve(a)))
+
+return(c(beta1, sigma_es))
+}         
+
+######  main code
+
+### SIMEX
+
+B = 50
+
+misMat = matrix(c(alpha,1-beta,1-alpha,beta),2,2)
+temp = eigen(misMat)
+Lam <- diag(temp$values)
+E <- temp$vectors 
+##E %*% Lam^2 %*% solve(E) == misMat%*%misMat
+
+lam.seq = c(1,2,3,4)
+
+B.hat = B.var1 = B.var2 = matrix(0,p,length(lam.seq))
+
+d = 1
+
+for(d in 1:length(lam.seq)){
+
+lam = lam.seq[d]
+
+##### repeat the following process for B times
+
+B.theta = matrix(0,2*p,B)
+
+b=1
+for(b in 1:B){
+
+misMat.b =E%*%Lam^lam%*%solve(E)
+
+Y.b = sapply(1:n, FUN = function(X){
+
+ifelse(Y[X]==1, 
+
+rbinom(1, 1, prob = misMat.b[1,1]), 
+
+rbinom(1, 1, prob = 1-misMat.b[2,2])) }) 
+
+value.simex.b = LinEE(n, p, as.matrix(Y.b), as.matrix(x), as.matrix(C), rep(0,p))
+
+theta.hat.simex.b = value.simex.b[1:p]
+
+theta.var.simex.b = (value.simex.b[(p+1):(2*p)])^2
+
+B.theta[,b] = c(theta.hat.simex.b,theta.var.simex.b) 
+
+}
+
+########### the end of  this repeat
+
+B.result = apply(B.theta,1,mean)
+B.var2[,d] = ((B-1)/B)*(apply(B.theta[1:p,],1,sd))^2
+B.hat[,d] = B.result[1:p]  ##### dth average estimate of theta.hat for B times
+B.var1[,d] = B.result[(p+1):(2*p)]  ##### dth average variance of theta.hat for B times
+
+}
+
+### naive analysis #####################
+
+value.lin = LinEE(n, p, as.matrix(Y), as.matrix(x), as.matrix(C), rep(0,p))
+
+theta.naive.hat = value.lin[1:p]
+
+see.naive.hat = value.lin[(p+1):(2*p)]
+
+p.naive.value = 2*(1 - pnorm(abs(theta.naive.hat), 0, see.naive.hat))
+
+###############extrapolation
+
+B.hat = cbind(theta.naive.hat,B.hat)
+
+B.var = cbind(see.naive.hat^2,(B.var1 - B.var2)) 
+
+lam.seq.new = c(0,lam.seq)
+
+### quadratic
+
+f <- function(x,a,b,c){a+b*x+c*x^2}
+
+theta.simex = rep(0,p)
+AIC.simex = rep(0,p)
+BIC.simex = rep(0,p)
+var.simex = rep(0,p)
+
+for(i in 1:p){
+y1 = B.hat[i,]
+
+temp.x = cbind(1,lam.seq.new,lam.seq.new^2)
+result1 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y1))
+temp.theta.simex = f(-1,result1[1],result1[2],result1[3])
+
+theta.simex[i] = temp.theta.simex
+
+xx1=lam.seq.new
+xx2=lam.seq.new^2
+ 
+AIC.simex[i] = AIC(lm(y1 ~  xx1 + xx2))
+BIC.simex[i] = BIC(lm(y1 ~  xx1 + xx2))
+
+y2 = B.var[i,]
+
+result2 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y2))
+temp.theta.var = f(-1,result2[1],result2[2],result2[3])
+
+var.simex[i] = temp.theta.var 
+}
+
+##theta.simex
+
+see.theta.simex = sqrt(var.simex)
+
+#### linear
+
+f.linear <- function(x,a,b){a+b*x}
+
+theta.simex1 = rep(0,p)
+var.simex1 = rep(0,p)
+AIC.simex1 = rep(0,p)
+BIC.simex1 = rep(0,p)
+
+for(i in 1:p){
+y1 = B.hat[i,]
+
+temp.x = cbind(1,lam.seq.new)
+result1 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y1))
+temp.theta.simex = f.linear(-1,result1[1],result1[2])
+
+theta.simex1[i] = temp.theta.simex
+AIC.simex1[i] = AIC(lm(y1 ~  lam.seq.new))
+BIC.simex1[i] = BIC(lm(y1 ~  lam.seq.new))
+
+y2 = B.var[i,]
+
+result2 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y2))
+temp.theta.var = f.linear(-1,result2[1],result2[2])
+
+var.simex1[i] = temp.theta.var 
+}
+
+##theta.simex
+
+see.theta.simex1 = sqrt(var.simex1)
+
+### cubic
+
+f.cubic <- function(x,a,b,c,d){a+b*x+c*x^2+d*x^3}
+
+theta.simex3 = rep(0,p)
+var.simex3 = rep(0,p)
+AIC.simex3 = rep(0,p)
+BIC.simex3 = rep(0,p)
+
+for(i in 1:p){
+y1 = B.hat[i,]
+temp.x = cbind(1,lam.seq.new,lam.seq.new^2,lam.seq.new^3)
+result1 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y1))
+temp.theta.simex = f.cubic(-1,result1[1],result1[2],result1[3],result1[4])
+
+theta.simex3[i] = temp.theta.simex
+
+xx1=lam.seq.new
+xx2=lam.seq.new^2
+xx3=lam.seq.new^3
+AIC.simex3[i] = AIC(lm(y1 ~  xx1+xx2+xx3))
+BIC.simex3[i] = BIC(lm(y1 ~  xx1+xx2+xx3))
+
+y2 = B.var[i,]
+
+result2 = as.vector(solve(t(temp.x)%*%temp.x)%*%(t(temp.x)%*%y2))
+temp.theta.var = f.cubic(-1,result2[1],result2[2],result2[3],result2[4])
+
+var.simex3[i] = temp.theta.var 
+}
+
+##theta.simex
+
+see.theta.simex3 = sqrt(var.simex3)
+
+p.cubic.value = 2*(1 - pnorm(abs(round(theta.simex3, digits = 4)), 0, round(see.theta.simex3, digits = 4)))
+
+p.linear.value = 2*(1 - pnorm(abs(round(theta.simex1, digits = 4)), 0, round(see.theta.simex1, digits = 4)))
+
+p.quadratic.value = 2*(1 - pnorm(abs(round(theta.simex, digits = 4)), 0, round(see.theta.simex, digits = 4)))
+
+n
+p
+alpha
+beta
+
+### linear
+round(theta.simex1, digits = 4)
+round(see.theta.simex1, digits = 4)
+round(p.linear.value, digits = 4)
+mean(AIC.simex1)
+mean(BIC.simex1) 
+
+## quadratic
+round(theta.simex, digits = 4)
+round(see.theta.simex, digits = 4)
+round(p.quadratic.value, digits = 4)
+mean(AIC.simex)
+mean(BIC.simex) 
+
+### cubic
+round(theta.simex3, digits = 4)
+round(see.theta.simex3, digits = 4)
+round(p.cubic.value, digits = 4)
+mean(AIC.simex3)
+mean(BIC.simex3) 
+
+### naive
+round(theta.naive.hat, digits = 4)
+round(see.naive.hat , digits = 4)
+round(p.naive.value, digits = 4)
+
+time2 = date()
+
+print(rbind(time1,time2))
+
+
+
